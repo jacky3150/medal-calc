@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="余りメダル計算">
+  <title>余りメダル計算機</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #050510;
+      font-family: 'Segoe UI', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes scanline {
+      0% { background-position: 0 0; }
+      100% { background-position: 0 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const SLOT_RATES = [5.16, 5.5, 5.6, 6.0, 6.5, 7.0];
+    const PACHI_RATES = [25, 28, 30, 33];
+    const MIN_UNITS = [100, 500, 1000];
+    const STORAGE_KEY = "pachislot-settings";
+
+    function InputField({ label, value, onChange, suffix = "", min, step = 1, placeholder = "0" }) {
+      const [focused, setFocused] = useState(false);
+      return (
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{
+            display: "block", color: "#aaa", fontSize: "0.7rem",
+            letterSpacing: "2px", marginBottom: "6px", textTransform: "uppercase",
+          }}>{label}</label>
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <input
+              type="number" value={value}
+              onChange={(e) => onChange(e.target.value)}
+              min={min} step={step} placeholder={placeholder}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              style={{
+                width: "100%", background: "#0d0d22",
+                border: `1px solid ${focused ? "#00f5ff88" : "#2a2a5a"}`,
+                borderRadius: "8px", color: "#e0e0ff", fontSize: "1.1rem",
+                padding: "12px 56px 12px 16px", outline: "none",
+                fontFamily: "'Courier New', monospace", letterSpacing: "1px",
+                width: "100%", transition: "border-color 0.2s",
+              }}
+            />
+            {suffix && (
+              <span style={{
+                position: "absolute", right: "14px", color: "#555",
+                fontSize: "0.8rem", pointerEvents: "none",
+              }}>{suffix}</span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function RateBtn({ label, active, onClick }) {
+      return (
+        <button onClick={onClick} style={{
+          padding: "7px 13px", borderRadius: "6px",
+          fontSize: "0.8rem", fontFamily: "'Courier New', monospace",
+          cursor: "pointer", transition: "all 0.15s",
+          border: active ? "1px solid #00f5ff" : "1px solid #2a2a5a",
+          background: active ? "rgba(0,245,255,0.12)" : "transparent",
+          color: active ? "#00f5ff" : "#666",
+          boxShadow: active ? "0 0 10px rgba(0,245,255,0.2)" : "none",
+        }}>{label}</button>
+      );
+    }
+
+    function ResultRow({ label, value, sub, accent = "#00f5ff", big = false }) {
+      return (
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: big ? "14px 16px" : "10px 14px",
+          background: big ? `${accent}10` : "#0d0d22",
+          border: `1px solid ${big ? accent + "33" : "#1a1a3a"}`,
+          borderRadius: "10px", marginBottom: "8px",
+        }}>
+          <div>
+            <span style={{ color: "#777", fontSize: "0.73rem", letterSpacing: "2px" }}>{label}</span>
+            {sub && <div style={{ color: "#444", fontSize: "0.62rem", marginTop: "2px" }}>{sub}</div>}
+          </div>
+          <span style={{
+            fontFamily: "'Courier New', monospace",
+            fontSize: big ? "1.5rem" : "1rem", fontWeight: big ? "bold" : "normal",
+            color: accent, textShadow: big ? `0 0 12px ${accent}55` : "none",
+            letterSpacing: "1px",
+          }}>{value}</span>
+        </div>
+      );
+    }
+
+    function App() {
+      const [mode, setMode] = useState("slot");
+      const [items, setItems] = useState("");
+      const [investment, setInvestment] = useState("");
+      const [customRate, setCustomRate] = useState("");
+      const [selectedRate, setSelectedRate] = useState(null);
+      const [minUnit, setMinUnit] = useState(100);
+      const [result, setResult] = useState(null);
+      const [saveStatus, setSaveStatus] = useState(null);
+
+      const rates = mode === "slot" ? SLOT_RATES : PACHI_RATES;
+      const unit = mode === "slot" ? "枚" : "玉";
+      const rateUnit = mode === "slot" ? "枚/100円" : "玉/100円";
+
+      useEffect(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const s = JSON.parse(saved);
+            if (s.mode) setMode(s.mode);
+            if (s.selectedRate !== undefined) setSelectedRate(s.selectedRate);
+            if (s.customRate !== undefined) setCustomRate(s.customRate);
+            if (s.minUnit) setMinUnit(s.minUnit);
+            setSaveStatus("loaded");
+            setTimeout(() => setSaveStatus(null), 2000);
+          }
+        } catch (_) {}
+      }, []);
+
+      useEffect(() => {
+        setItems(""); setInvestment(""); setResult(null);
+        setSelectedRate(null); setCustomRate("");
+      }, [mode]);
+
+      useEffect(() => { calculate(); }, [items, investment, selectedRate, customRate, mode, minUnit]);
+
+      function getRate() {
+        if (selectedRate !== null) return selectedRate;
+        return parseFloat(customRate);
+      }
+
+      function calculate() {
+        const count = parseFloat(items);
+        const inv = parseFloat(investment) || 0;
+        const rate = getRate();
+        const countInt = Math.floor(count);
+        if (!countInt || !rate || rate <= 0 || countInt < 0) { setResult(null); return; }
+        const medalsPerUnit = rate * (minUnit / 100);
+        const exchangeGroups = Math.floor(countInt / medalsPerUnit);
+        const cashAmount = exchangeGroups * minUnit;
+        const remainder = Math.round(countInt - exchangeGroups * medalsPerUnit);
+        const profitLoss = cashAmount - inv;
+        setResult({ cashAmount, remainder, profitLoss, medalsPerUnit: Math.ceil(medalsPerUnit) });
+      }
+
+      function saveSettings() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, selectedRate, customRate, minUnit }));
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus(null), 2000);
+        } catch (_) {
+          setSaveStatus("error");
+          setTimeout(() => setSaveStatus(null), 2000);
+        }
+      }
+
+      function reset() {
+        setItems(""); setInvestment(""); setCustomRate("");
+        setSelectedRate(null); setResult(null);
+      }
+
+      const plColor = result
+        ? result.profitLoss > 0 ? "#00ff88" : result.profitLoss < 0 ? "#ff4466" : "#ffcc00"
+        : "#ffcc00";
+      const plSign = result && result.profitLoss > 0 ? "+" : "";
+
+      const saveLabel = saveStatus === "saved" ? "✓ 保存しました"
+        : saveStatus === "loaded" ? "✓ 設定を読み込みました"
+        : saveStatus === "error" ? "✗ 保存失敗"
+        : "💾 この設定を保存";
+      const saveBorderColor = (saveStatus === "saved" || saveStatus === "loaded") ? "#00ff8844"
+        : saveStatus === "error" ? "#ff446644" : "#2a2a5a";
+      const saveTextColor = (saveStatus === "saved" || saveStatus === "loaded") ? "#00ff88"
+        : saveStatus === "error" ? "#ff4466" : "#666";
+      const saveBgColor = (saveStatus === "saved" || saveStatus === "loaded") ? "rgba(0,255,136,0.08)"
+        : saveStatus === "error" ? "rgba(255,68,102,0.08)" : "transparent";
+
+      return (
+        <div style={{
+          minHeight: "100vh",
+          background: "linear-gradient(160deg, #050510 0%, #0a0a1e 50%, #050518 100%)",
+          display: "flex", alignItems: "flex-start", justifyContent: "center",
+          padding: "env(safe-area-inset-top, 24px) 16px 40px",
+        }}>
+          <div style={{ width: "100%", maxWidth: "460px" }}>
+
+            {/* Header */}
+            <div style={{ textAlign: "center", marginBottom: "24px", paddingTop: "16px" }}>
+              <div style={{ fontSize: "0.62rem", letterSpacing: "6px", color: "#00f5ff88", marginBottom: "6px" }}>
+                PACHISLOT
+              </div>
+              <h1 style={{
+                margin: 0, fontSize: "clamp(1.3rem, 5vw, 1.8rem)", fontWeight: "800",
+                color: "#fff", letterSpacing: "3px", textShadow: "0 0 30px #00f5ff44",
+              }}>
+                余りメダル計算機
+              </h1>
+              <div style={{
+                width: "60px", height: "2px",
+                background: "linear-gradient(90deg, transparent, #00f5ff, transparent)",
+                margin: "10px auto 0",
+              }} />
+            </div>
+
+            {/* Mode Toggle */}
+            <div style={{
+              display: "flex", background: "#0a0a1e",
+              border: "1px solid #1a1a40", borderRadius: "12px",
+              padding: "4px", marginBottom: "16px", gap: "4px",
+            }}>
+              {[{ key: "slot", label: "🎰 スロット" }, { key: "pachi", label: "🔵 パチンコ" }].map(({ key, label }) => (
+                <button key={key} onClick={() => setMode(key)} style={{
+                  flex: 1, padding: "10px", borderRadius: "8px",
+                  border: "none", cursor: "pointer", fontSize: "0.88rem",
+                  fontWeight: "600", letterSpacing: "1px", transition: "all 0.2s",
+                  background: mode === key ? "rgba(0,245,255,0.12)" : "transparent",
+                  color: mode === key ? "#00f5ff" : "#444",
+                }}>{label}</button>
+              ))}
+            </div>
+
+            {/* Main Card */}
+            <div style={{
+              background: "rgba(255,255,255,0.03)", border: "1px solid #1a1a40",
+              borderRadius: "16px", padding: "24px",
+              boxShadow: "0 0 40px rgba(0,245,255,0.04)",
+            }}>
+
+              {/* Exchange Rate */}
+              <div style={{ marginBottom: "20px" }}>
+                <label style={{
+                  display: "block", color: "#aaa", fontSize: "0.7rem",
+                  letterSpacing: "2px", marginBottom: "8px", textTransform: "uppercase",
+                }}>
+                  交換率 <span style={{ color: "#444" }}>({rateUnit})</span>
+                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px" }}>
+                  {rates.map((r) => (
+                    <RateBtn key={r} label={String(r)} active={selectedRate === r}
+                      onClick={() => { setSelectedRate(r); setCustomRate(""); }} />
+                  ))}
+                  <RateBtn label="カスタム" active={selectedRate === null}
+                    onClick={() => setSelectedRate(null)} />
+                </div>
+                {selectedRate === null && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <input
+                      type="number" value={customRate}
+                      onChange={(e) => setCustomRate(e.target.value)}
+                      placeholder={mode === "slot" ? "例: 5.16" : "例: 28"}
+                      step={mode === "slot" ? 0.01 : 1}
+                      style={{
+                        flex: 1, background: "#0d0d22",
+                        border: "1px solid #00f5ff55", borderRadius: "8px",
+                        color: "#e0e0ff", fontSize: "1.1rem",
+                        padding: "11px 14px", outline: "none",
+                        fontFamily: "'Courier New', monospace",
+                      }}
+                    />
+                    <span style={{ color: "#555", fontSize: "0.8rem", whiteSpace: "nowrap" }}>{rateUnit}</span>
+                  </div>
+                )}
+                {getRate() > 0 && (
+                  <div style={{
+                    marginTop: "10px", padding: "8px 12px",
+                    background: "rgba(0,245,255,0.05)", borderRadius: "6px",
+                    fontSize: "0.73rem", color: "#00f5ff77",
+                    fontFamily: "'Courier New', monospace", letterSpacing: "1px",
+                  }}>
+                    ▶ {getRate()}{rateUnit} → 100{unit}あたり {(100 / getRate()).toFixed(2)}円
+                  </div>
+                )}
+              </div>
+
+              {/* Min Unit */}
+              <div style={{ marginBottom: "20px" }}>
+                <label style={{
+                  display: "block", color: "#aaa", fontSize: "0.7rem",
+                  letterSpacing: "2px", marginBottom: "8px", textTransform: "uppercase",
+                }}>換金最低単位</label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  {MIN_UNITS.map((u) => (
+                    <button key={u} onClick={() => setMinUnit(u)} style={{
+                      flex: 1, padding: "10px 0", borderRadius: "8px",
+                      fontSize: "0.85rem", fontFamily: "'Courier New', monospace",
+                      cursor: "pointer", transition: "all 0.15s",
+                      border: minUnit === u ? "1px solid #aa88ff" : "1px solid #2a2a5a",
+                      background: minUnit === u ? "rgba(170,136,255,0.12)" : "transparent",
+                      color: minUnit === u ? "#cc99ff" : "#555",
+                    }}>
+                      {u.toLocaleString()}円
+                    </button>
+                  ))}
+                </div>
+                {getRate() > 0 && (
+                  <div style={{
+                    marginTop: "10px", padding: "8px 12px",
+                    background: "rgba(170,136,255,0.05)", borderRadius: "6px",
+                    fontSize: "0.73rem", color: "#aa88ff88",
+                    fontFamily: "'Courier New', monospace", letterSpacing: "1px",
+                  }}>
+                    ▶ {minUnit.toLocaleString()}円換金に必要: {Math.ceil(getRate() * (minUnit / 100))}{unit}以上
+                  </div>
+                )}
+              </div>
+
+              {/* Save Button */}
+              <button onClick={saveSettings} style={{
+                width: "100%", padding: "11px",
+                background: saveBgColor, border: `1px solid ${saveBorderColor}`,
+                borderRadius: "8px", color: saveTextColor,
+                fontSize: "0.8rem", letterSpacing: "1.5px",
+                cursor: "pointer", marginBottom: "10px", transition: "all 0.3s",
+              }}>{saveLabel}</button>
+
+              <InputField label={`持ち${unit}数`} value={items} onChange={setItems} suffix={unit} min={0} />
+              <InputField label="使用金額（投資額）" value={investment} onChange={setInvestment} suffix="円" min={0} step={100} />
+
+              <button onClick={reset} style={{
+                width: "100%", padding: "10px",
+                background: "transparent", border: "1px solid #2a2a5a",
+                borderRadius: "8px", color: "#555", fontSize: "0.75rem",
+                letterSpacing: "2px", cursor: "pointer", marginTop: "4px",
+              }}>RESET</button>
+            </div>
+
+            {/* Results */}
+            {result && (
+              <div className="fade-in" style={{
+                marginTop: "16px",
+                background: "rgba(255,255,255,0.03)", border: "1px solid #1a1a40",
+                borderRadius: "16px", padding: "24px",
+              }}>
+                <div style={{
+                  fontSize: "0.62rem", letterSpacing: "4px", color: "#00f5ff55",
+                  marginBottom: "14px", textAlign: "center",
+                }}>— RESULT —</div>
+
+                <ResultRow label="換金額" sub={`最低単位: ${minUnit.toLocaleString()}円`}
+                  value={`${result.cashAmount.toLocaleString()}円`} accent="#00f5ff" big />
+                <ResultRow label={`余り${unit}`}
+                  sub={`次回${minUnit.toLocaleString()}円換金まであと ${Math.max(0, result.medalsPerUnit - result.remainder)}${unit}`}
+                  value={`${result.remainder}${unit}`} accent="#ffaa00" />
+                <ResultRow label="損益"
+                  value={`${plSign}${result.profitLoss.toLocaleString()}円`}
+                  accent={plColor} big />
+
+                <div style={{
+                  marginTop: "4px", padding: "10px 14px",
+                  background: "#ffaa0008", border: "1px solid #ffaa0022",
+                  borderRadius: "8px", fontSize: "0.7rem", color: "#ffaa0099", lineHeight: "1.7",
+                }}>
+                  💡 余り <b style={{ color: "#ffaa00" }}>{result.remainder}{unit}</b> は今日交換不可。次回の持ち{unit}に繰り越しましょう。
+                </div>
+              </div>
+            )}
+
+            <div style={{
+              textAlign: "center", marginTop: "20px",
+              color: "#2a2a3a", fontSize: "0.6rem", letterSpacing: "2px",
+            }}>
+              計算結果はあくまで参考値です
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
